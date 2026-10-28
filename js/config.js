@@ -1,4 +1,4 @@
-// Site settings. Edit these, commit, and GitHub Pages updates in a minute or two.
+// Site settings. Edit, commit, and GitHub Pages updates in a minute or two.
 window.LF_CONFIG = {
   // Name shown in the top bar and the browser tab.
   siteTitle: "Logic First",
@@ -6,17 +6,20 @@ window.LF_CONFIG = {
   // Small line under the name, e.g. "COSC 1010 · Spring 2027". Leave "" to hide it.
   courseLabel: "Algorithm practice for Marquette students",
 
-  // OPTIONAL class server. If you deploy proxy/cloudflare-worker.js and paste its URL here,
-  // students get automatic code generation with no setup, billed to your API key.
-  // Leave "" and students use copy & paste with Claude.ai (free) or their own API key.
-  proxyUrl: "",
+  // FREE class AI server (Cloudflare Workers AI, free plan). Paste your worker's URL here,
+  // e.g. "https://logic-first-ai.yourname.workers.dev". Setup steps: ai-server/README.md.
+  // Leave "" to use only the free in-browser AI.
+  aiServerUrl: "",
 
-  // Models used when a student chooses "My own Anthropic API key".
-  apiModels: [
-    { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5 (recommended)" },
-    { id: "claude-haiku-5-5", label: "Claude Haiku 5.5 (faster, cheaper)" }
+  // Free AI that runs inside the student's browser (needs Chrome or Edge on a laptop/desktop).
+  // Downloaded once, then cached. The first entry is the default.
+  localModels: [
+    { id: "Qwen2.5-Coder-3B-Instruct", label: "Standard (better translations)", size: "about 1.7 GB" },
+    { id: "Qwen2.5-Coder-1.5B-Instruct", label: "Lite (for older computers)", size: "about 0.9 GB" }
   ],
 
-  // Where the "Open Claude.ai" buttons go in copy & paste mode.
-  claudeChatUrl: "https://claude.ai/new"
+  // Library versions loaded from the jsDelivr CDN. Change only if you know you need to.
+  // If you change webllmVersion, change it in js/llm-worker.js too.
+  webllmVersion: "0.2.85",
+  pyodideUrl: "https://cdn.jsdelivr.net/npm/pyodide@0.29.5/"
 };

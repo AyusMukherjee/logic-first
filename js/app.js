@@ -1,20 +1,17 @@
-/* Logic First — app logic. No build step, no dependencies. */
+/* Logic First — app logic. No build step, no paid services.
+   Pseudocode -> (free AI) -> Python + Java -> tests run on the Python in the browser (Pyodide). */
 (function () {
   "use strict";
 
   const CFG = Object.assign({
-    siteTitle: "Logic First", courseLabel: "", proxyUrl: "",
-    apiModels: [{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" }],
-    claudeChatUrl: "https://claude.ai/new"
+    siteTitle: "Logic First", courseLabel: "", aiServerUrl: "",
+    localModels: [{ id: "Qwen2.5-Coder-3B-Instruct", label: "Standard", size: "about 1.7 GB" }],
+    webllmVersion: "0.2.85", pyodideUrl: "https://cdn.jsdelivr.net/npm/pyodide@0.29.5/"
   }, window.LF_CONFIG || {});
   const PROBLEMS = window.LF_PROBLEMS || [];
   const byId = new Map(PROBLEMS.map(p => [p.id, p]));
   const TOPICS = [...new Set(PROBLEMS.map(p => p.topic))];
-  const LANGS = {
-    python: { name: "Python", tag: "python" }, java: { name: "Java", tag: "java" },
-    cpp: { name: "C++", tag: "cpp" }, c: { name: "C", tag: "c" }, javascript: { name: "JavaScript", tag: "javascript" }
-  };
-  const MODE_LABEL = { claude: "Claude: built in", proxy: "Class server", copy: "Copy & paste mode", apikey: "API key mode" };
+  const LANG_NAME = { python: "Python", java: "Java" };
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -27,12 +24,12 @@
     del(k) { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }
   };
   const K = {
-    solved: "lf2:solved", tried: "lf2:tried", lang: "lf2:lang", mode: "lf2:mode", key: "lf2:apikey", model: "lf2:model", left: "lf2:left",
-    draft: (id) => "lf2:draft:" + id, gen: (id) => "lf2:gen:" + id
+    solved: "lf2:solved", tried: "lf2:tried", lang: "lf3:lang", engine: "lf3:engine", model: "lf3:model", left: "lf2:left",
+    serverDown: "lf3:serverDownUntil", draft: (id) => "lf2:draft:" + id, gen: (id) => "lf3:gen:" + id
   };
   let solved = store.get(K.solved, {});
   let tried = store.get(K.tried, {});
-  let lang = LANGS[store.get(K.lang, "python")] ? store.get(K.lang, "python") : "python";
+  let lang = LANG_NAME[store.get(K.lang, "python")] ? store.get(K.lang, "python") : "python";
 
   /* ---------- value helpers (match instructor-tools/build.mjs) ---------- */
   const keyOf = (v) => { if (v === undefined) return "undefined"; const s = JSON.stringify(v); return s === undefined ? String(v) : s; };
@@ -42,6 +39,7 @@
     if (cmp === "sortedDeep") return normalize(v.map(x => (Array.isArray(x) ? normalize(x, "sorted") : x)), "sorted");
     return v;
   };
+  const fnv = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
   const isGen = (v) => v && typeof v === "object" && !Array.isArray(v) && v.$gen;
   const fmtArg = (v) => (isGen(v) ? `[${v.n.toLocaleString()} generated numbers]` : keyOf(v));
   const fmtArgs = (p, args) => p.params.map(([n], i) => `${n} = ${fmtArg(args[i])}`).join(", ");
@@ -58,203 +56,245 @@
 
   /* ---------- toast & clipboard ---------- */
   let toastT;
-  function toast(msg) { const t = $("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 2600); }
-  async function copyText(text, fallbackPre) {
+  function toast(msg) { const t = $("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 2800); }
+  async function copyText(text) {
     try { await navigator.clipboard.writeText(text); return true; }
     catch (e) {
       try {
         const ta = document.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
-        document.body.appendChild(ta); ta.select(); const ok = document.execCommand("copy"); ta.remove(); if (ok) return true;
-      } catch (e2) { /* fall through */ }
-      if (fallbackPre) { const d = fallbackPre.closest("details"); if (d) d.open = true; const r = document.createRange(); r.selectNodeContents(fallbackPre); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
-      return false;
+        document.body.appendChild(ta); ta.select(); const ok = document.execCommand("copy"); ta.remove(); return ok;
+      } catch (e2) { return false; }
     }
   }
 
   /* =====================================================================
-     Claude access: built in (claude.ai), class proxy, API key, or copy & paste
+     Prompts
      ===================================================================== */
-  let sampleFn = null;
-  const samplePromise = (window.claude && typeof window.claude.use === "function")
-    ? window.claude.use("sample").then(s => { sampleFn = s || null; return sampleFn; }).catch(() => null)
-    : Promise.resolve(null);
-
-  function availableModes() { const m = []; if (sampleFn) m.push("claude"); if (CFG.proxyUrl) m.push("proxy"); m.push("copy", "apikey"); return m; }
-  function currentMode() {
-    const saved = store.get(K.mode, null), av = availableModes();
-    if (saved && av.includes(saved)) return saved;
-    if (sampleFn) return "claude";
-    if (CFG.proxyUrl) return "proxy";
-    if (store.get(K.key, "")) return "apikey";
-    return "copy";
-  }
-  function refreshChip() { $("aiChipText").textContent = MODE_LABEL[currentMode()]; }
-
-  let ctl = null;
-  const friendly = (message, extra) => Object.assign({ message }, extra || {});
-
-  async function askClaude(prompt, purpose, onText) {
-    const mode = currentMode();
-    ctl = new AbortController();
-    const signal = ctl.signal;
-
-    if (mode === "claude") {
-      try {
-        const r = await sampleFn(prompt, {
-          signal, modelTier: purpose === "hint" ? "quick" : "default", cache: purpose === "code",
-          onText: onText ? ({ text }) => onText(text) : undefined
-        });
-        return r.text;
-      } catch (e) {
-        const c = e && e.code;
-        if (c === "cancelled") throw friendly("Stopped.", { cancelled: true });
-        if (["not_granted", "sampling_disabled", "capability_disabled", "not_declared", "capability_removed"].includes(c)) {
-          sampleFn = null; store.set(K.mode, "copy"); refreshChip();
-          throw friendly("Claude isn't allowed for this page, so we switched to copy & paste mode. Press the button again.");
-        }
-        if (c === "rate_limited") throw friendly("Too many requests right now. Wait a minute, then try again.");
-        if (c === "session_expired") throw friendly("Your Claude session expired. Sign in again, then retry.");
-        if (c === "refused") throw friendly("Claude declined this request. Edit your pseudocode and try again.");
-        if (c === "prompt_too_large") throw friendly("Your pseudocode is too long. Shorten it and try again.");
-        throw friendly("Couldn't reach Claude. Try again in a moment.");
-      }
-    }
-
-    let res;
-    try {
-      if (mode === "proxy") {
-        res = await fetch(CFG.proxyUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt, purpose }), signal });
-      } else if (mode === "apikey") {
-        const key = store.get(K.key, "");
-        if (!key) throw friendly("Add your Anthropic API key first: click the mode button in the top bar.");
-        const models = CFG.apiModels || [];
-        let model = store.get(K.model, models[0] && models[0].id);
-        if (purpose === "hint" && models.length > 1) model = models[models.length - 1].id;
-        res = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST", signal,
-          headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-          body: JSON.stringify({ model, max_tokens: purpose === "code" ? 4000 : 800, messages: [{ role: "user", content: prompt }] })
-        });
-      } else {
-        throw friendly("Copy & paste mode doesn't call Claude directly.");
-      }
-    } catch (e) {
-      if (e && e.name === "AbortError") throw friendly("Stopped.", { cancelled: true });
-      if (e && e.message && !(e instanceof TypeError)) throw e;
-      throw friendly(mode === "proxy" ? "Couldn't reach the class server. Check your connection, or switch to copy & paste mode." : "Couldn't reach Claude's API. Check your connection.");
-    }
-
-    let data = null;
-    try { data = await res.json(); } catch (e) { /* non-JSON body */ }
-    if (!res.ok) {
-      const msg = data && (data.error && (data.error.message || data.error)) || "";
-      if (res.status === 401) throw friendly(mode === "apikey" ? "The API key was rejected. Check it in settings." : "The class server's API key was rejected. Tell your instructor.");
-      if (res.status === 429) throw friendly("Rate limit reached. Wait a minute, then try again.");
-      if (res.status === 400 && /credit|billing/i.test(String(msg))) throw friendly("That API account is out of credit. Add credit at console.anthropic.com or use copy & paste mode.");
-      if (res.status === 403) throw friendly(mode === "proxy" ? "The class server refused this request (wrong site address?). Tell your instructor." : "This API key isn't allowed to make this request.");
-      if (res.status >= 500) throw friendly("Claude is busy right now. Try again in a moment.");
-      throw friendly("Request failed" + (msg ? ": " + String(msg) : "."));
-    }
-    const text = mode === "proxy" ? (data && data.text) : (data && Array.isArray(data.content) ? data.content.filter(b => b.type === "text").map(b => b.text).join("") : "");
-    if (!text) throw friendly("Claude sent back an empty reply. Try again.");
-    if (onText) onText(text);
-    return text;
-  }
-
-  /* ---------- prompts ---------- */
+  const PY_T = { "int": "int", "int[]": "List[int]", "int[][]": "List[List[int]]", "string": "str", "string[]": "List[str]", "string[][]": "List[List[str]]", "char[][]": "List[List[str]]", "boolean": "bool", "ListNode": "Optional[ListNode]", "TreeNode": "Optional[TreeNode]" };
+  const JAVA_P = { "int": "int", "int[]": "int[]", "int[][]": "int[][]", "string": "String", "string[]": "String[]", "string[][]": "String[][]", "char[][]": "char[][]", "boolean": "boolean", "ListNode": "ListNode", "TreeNode": "TreeNode" };
+  const JAVA_R = Object.assign({}, JAVA_P, { "int[][]": "List<List<Integer>>", "string[]": "List<String>", "string[][]": "List<List<String>>" });
   const usesNodes = (p) => [p.returns, ...p.params.map(x => x[1])].some(t => t === "ListNode" || t === "TreeNode");
-  const sigText = (p) => `${p.fn}(${p.params.map(([n, t]) => `${n}: ${t}`).join(", ")}) -> ${p.returns}`;
-  function problemBlock(p) {
-    const ex = p.tests.slice(0, 2).map(t => `  ${fmtArgs(p, t.args)}  ->  ${expectedText(t)}`).join("\n");
-    return `PROBLEM: ${p.title}\n${p.text}\n${p.notes.length ? "Notes: " + p.notes.join(" ") + "\n" : ""}Function: ${sigText(p)}\nExamples:\n${ex}`;
-  }
-  function translatePrompt(p, pc, lg) {
-    const names = p.params.map(x => x[0]).join(", ");
-    const struct = usesNodes(p) ? " ListNode has fields val and next; TreeNode has fields val, left and right. In JavaScript these classes already exist as ListNode(val, next) and TreeNode(val, left, right): use them and do not declare them." : "";
-    const other = lg !== "javascript";
-    return `You are the code generator for a coding-practice site. Students write ONLY the algorithm as pseudocode; you write the code.
+  const pySig = (p) => `def ${p.fn}(${p.params.map(([n, t]) => `${n}: ${PY_T[t] || t}`).join(", ")}) -> ${PY_T[p.returns] || p.returns}:`;
+  const javaSig = (p) => `public ${JAVA_R[p.returns] || p.returns} ${p.fn}(${p.params.map(([n, t]) => `${JAVA_P[t] || t} ${n}`).join(", ")})`;
 
-${problemBlock(p)}
+  const SYSTEM = "You convert a student's pseudocode into code, literally. Never fix their mistakes, never change their algorithm, and never add steps they did not write. Reply only in the requested format.";
+  const TUTOR = "You are a friendly, concise algorithms tutor for university students.";
+
+  function problemBrief(p) {
+    const ex = p.tests.slice(0, 2).map(t => `  ${clip(fmtArgs(p, t.args), 300)}  ->  ${clip(expectedText(t), 200)}`).join("\n");
+    return `PROBLEM: ${p.title}\n${p.text}\nExamples:\n${ex}`;
+  }
+  function convertPrompt(p, pc) {
+    return `Convert the student's pseudocode into Python and Java.
+
+${problemBrief(p)}
+
+PYTHON SIGNATURE: ${pySig(p)}
+JAVA SIGNATURE: ${javaSig(p)}   (inside class Solution)${usesNodes(p) ? "\nListNode (fields val, next) and TreeNode (fields val, left, right) classes already exist in both languages. Do not define them." : ""}
 
 STUDENT PSEUDOCODE:
-"""
+<<<
 ${pc}
-"""
+>>>
 
-Rules:
-1. Translate the student's logic faithfully, step by step. Do NOT fix mistakes, do NOT switch to a different algorithm, and do NOT add edge-case handling they did not describe. If their logic is wrong, the code must be wrong in the same way, because tests run on your code to grade THEIR logic.
-2. Fill in only mechanical details: syntax, declarations, the obvious data structure for a named concept ("a set", "a map", "a queue"), and loop bounds that are clearly implied.
-3. Where a step is ambiguous, pick the most literal reasonable reading and list it under ASSUMPTIONS. If the pseudocode is empty, unrelated to this problem, or too vague to translate, write one ASSUMPTIONS line explaining why and output no code blocks.
-4. The JavaScript must be one function declaration named ${p.fn} with parameters (${names}). Put helpers inside it. No imports, input/output, console.log or test code.${struct}${other ? `
-5. Then write the same logic in ${LANGS[lg].name}: idiomatic and readable, with a short comment above each major step that echoes the student's wording, and types that match the signature.` : ""}
+RULES
+1. Translate the pseudocode literally, step by step. Keep the student's algorithm even if it is wrong or slow. Do not fix bugs, add missing cases, or optimize. Wrong logic must give wrong code.
+2. Only fill in obvious details: syntax, declarations, the data structure they named, loop bounds they clearly meant.
+3. If a step is unclear, use the most literal reading and say so under NOTES.
+4. If the pseudocode is empty or not about this problem, say so under NOTES and write no code.
+5. Python: one top-level function with exactly that signature. You may import from typing, collections, heapq and math. No input(), no print(), no example calls.
+6. Java: class Solution containing that method, with the same logic as the Python.
 
-Reply in exactly this format and nothing else:
-
-ASSUMPTIONS:
-- (one short line each, or "- none")
-
-\`\`\`javascript
-(the JavaScript function)
-\`\`\`${other ? `
-
-\`\`\`${LANGS[lg].tag}
-(the ${LANGS[lg].name} version)
-\`\`\`` : ""}`;
+Reply in exactly this format:
+NOTES:
+- (each assumption on its own line, or "- none")
+\`\`\`python
+(Python code)
+\`\`\`
+\`\`\`java
+(Java code)
+\`\`\``;
   }
   function hintPrompt(p, pc) {
     return `A student is practising algorithms by writing pseudocode.
 
-${problemBlock(p)}
+${problemBrief(p)}
 
-${pc ? `Their current draft:\n"""\n${pc}\n"""\n\n` : "They have not written anything yet.\n\n"}Give ONE short hint, at most two sentences, that nudges them toward the key idea${pc ? " or the next fix their draft needs" : ""}. Do not write pseudocode or code, and do not reveal the full algorithm. Plain text only.`;
+${pc ? `Their current draft:\n<<<\n${pc}\n>>>\n\n` : "They have not written anything yet.\n\n"}Give ONE short hint, at most two sentences, that nudges them toward the key idea${pc ? " or the next fix their draft needs" : ""}. Do not write pseudocode or code, and do not reveal the full algorithm. Plain text only.`;
   }
   function reviewPrompt(p, pc) {
-    const rows = run.rows;
-    const fails = rows.filter(r => !r.pass).slice(0, 3);
+    const rows = run.rows, fails = rows.filter(r => !r.pass).slice(0, 2);
     const results = fails.length
-      ? `Passed ${rows.length - rows.filter(r => !r.pass).length} of ${rows.length} tests. Failing cases:\n` + fails.map(r => `- input ${clip(r.input, 400)} | expected ${clip(r.expected, 200)} | got ${r.error ? "an error: " + r.error : clip(r.got, 200)}`).join("\n")
+      ? `Passed ${rows.length - rows.filter(r => !r.pass).length} of ${rows.length} tests. Failing:\n` + fails.map(r => `- input ${clip(r.input, 300)} | expected ${clip(r.expected, 150)} | got ${r.error ? "an error: " + clip(r.error, 150) : clip(r.got, 150)}`).join("\n")
       : `All ${rows.length} tests passed.`;
-    return `You are a friendly algorithms tutor. A student wrote pseudocode, it was translated literally into JavaScript, and tests were run.
+    return `You are a friendly algorithms tutor. A student wrote pseudocode, it was translated literally into Python, and tests were run.
 
-${problemBlock(p)}
+${problemBrief(p)}
 
 STUDENT PSEUDOCODE:
-"""
+<<<
 ${pc}
-"""
+>>>
 
-GENERATED JAVASCRIPT:
-${gen ? gen.js : "(none)"}
+PYTHON CODE:
+${gen ? clip(gen.python, 2500) : "(none)"}
 
 TEST RESULTS:
 ${results}
 
-Write feedback in under 150 words, plain text, no headings or markdown.
-- If tests failed: name the flaw in their LOGIC, trace one failing input briefly to show where it goes wrong, and say what to reconsider without writing the corrected solution. If the failure was caused by the translation rather than their logic, say so plainly.
-- If all passed: give the time and space complexity of their approach and one improvement or edge case worth thinking about.`;
+Write feedback in under 120 words, plain text, no headings.
+- If tests failed: name the flaw in their LOGIC, trace one failing input briefly to show where it goes wrong, and say what to reconsider without giving the corrected solution.
+- If all passed: give the time and space complexity and one edge case or improvement to think about.`;
   }
 
   function parseReply(text) {
     const blocks = [];
     const re = /```([^\n`]*)\n([\s\S]*?)```/g; let m;
     while ((m = re.exec(text))) blocks.push({ tag: m[1].trim().toLowerCase(), body: m[2].replace(/\s+$/, "") });
-    const jsTags = ["js", "javascript", "node", "jsx", "mjs"];
-    let js = blocks.find(b => jsTags.includes(b.tag));
-    let other = blocks.find(b => b !== js && b.tag && !jsTags.includes(b.tag)) || null;
-    if (!js) { const untagged = blocks.find(b => !b.tag && /function\s+\w+\s*\(/.test(b.body)); if (untagged) js = untagged; }
-    if (!js && !blocks.length && /function\s+\w+\s*\(/.test(text)) js = { body: text.trim() };
-    const assumptions = [];
-    const am = text.match(/ASSUMPTIONS:\s*\n([\s\S]*?)(?:```|$)/i);
-    if (am) am[1].split("\n").forEach(l => { if (/^\s*[-*•]/.test(l)) { const t = l.replace(/^\s*[-*•]\s*/, "").trim(); if (t && !/^\(?none\)?\.?$/i.test(t)) assumptions.push(t); } });
-    if (!js && !assumptions.length && text.trim()) assumptions.push(clip(text.trim(), 400));
-    return { js: js ? js.body : "", code: other ? other.body : "", assumptions: assumptions.slice(0, 6) };
+    let py = blocks.find(b => ["python", "py", "python3"].includes(b.tag));
+    let java = blocks.find(b => b.tag === "java");
+    if (!py) py = blocks.find(b => !b.tag && /^\s*(from|import|def)\s/m.test(b.body));
+    if (!java) java = blocks.find(b => !b.tag && /class\s+Solution|public\s+\w/.test(b.body) && b !== py);
+    if (!py && !blocks.length && /^\s*def\s+\w+\s*\(/m.test(text)) py = { body: text.trim() };
+    const notes = [];
+    const nm = text.match(/NOTES:\s*\n([\s\S]*?)(?:```|$)/i);
+    if (nm) nm[1].split("\n").forEach(l => { if (/^\s*[-*•]/.test(l)) { const t = l.replace(/^\s*[-*•]\s*/, "").trim(); if (t && !/^\(?none\)?\.?$/i.test(t)) notes.push(t); } });
+    if (!py && !notes.length && text.trim()) notes.push(clip(text.trim(), 400));
+    return { python: py ? py.body : "", java: java ? java.body : "", notes: notes.slice(0, 6) };
+  }
+
+  /* =====================================================================
+     Free AI engines: class server (Cloudflare Workers AI) and in-browser model (WebLLM)
+     ===================================================================== */
+  let ctl = null;
+  const fail = (message, extra) => Object.assign({ message }, extra || {});
+  function engineMode() { const m = store.get(K.engine, "auto"); return (m === "server" && !CFG.aiServerUrl) ? "auto" : m; }
+  const serverDown = () => Date.now() < store.get(K.serverDown, 0);
+
+  async function viaServer(prompt, purpose, signal) {
+    let res;
+    try {
+      res = await fetch(CFG.aiServerUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt, purpose, system: SYSTEM }), signal });
+    } catch (e) {
+      if (e && e.name === "AbortError") throw fail("Stopped.", { cancelled: true });
+      throw fail("Couldn't reach the class AI server.", { fallback: true });
+    }
+    let data = null; try { data = await res.json(); } catch (e) { /* not JSON */ }
+    if (!res.ok) {
+      if (res.status === 429) throw fail("The class AI server has used today's free limit.", { fallback: true, quota: true });
+      if (res.status === 403) throw fail("The class AI server doesn't accept requests from this site address.", { fallback: true });
+      throw fail((data && data.error) || "The class AI server had a problem.", { fallback: true });
+    }
+    if (!data || !data.text) throw fail("The class AI server sent an empty reply.", { fallback: true });
+    return data.text;
+  }
+
+  let webllm = null, engine = null, engineId = null, llmWorker = null, gpuInfo;
+  async function gpu() {
+    if (gpuInfo !== undefined) return gpuInfo;
+    gpuInfo = null;
+    try { if (navigator.gpu) { const a = await navigator.gpu.requestAdapter(); if (a) gpuInfo = { f16: a.features.has("shader-f16") }; } } catch (e) { gpuInfo = null; }
+    return gpuInfo;
+  }
+  function localBase() { const ids = CFG.localModels.map(m => m.id); const s = store.get(K.model, ids[0]); return ids.includes(s) ? s : ids[0]; }
+  const localInfo = (base) => CFG.localModels.find(m => m.id === base) || CFG.localModels[0];
+  const localId = (base, f16) => `${base}-${f16 ? "q4f16_1" : "q4f32_1"}-MLC`;
+  async function lib() { if (!webllm) webllm = await import(`https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@${CFG.webllmVersion}/+esm`); return webllm; }
+  async function localState() {
+    const g = await gpu();
+    if (!g) return { state: "unsupported" };
+    const id = localId(localBase(), g.f16);
+    if (engine && engineId === id) return { state: "ready", id };
+    let cached = false;
+    try { cached = await (await lib()).hasModelInCache(id); } catch (e) { cached = false; }
+    return { state: cached ? "cached" : "download", id };
+  }
+  async function ensureLocal(onProgress) {
+    const st = await localState();
+    if (st.state === "ready") return engine;
+    if (engine) { try { await engine.unload(); } catch (e) { /* ignore */ } engine = null; }
+    if (llmWorker) { llmWorker.terminate(); llmWorker = null; }
+    const w = await lib();
+    llmWorker = new Worker(new URL("js/llm-worker.js", document.baseURI), { type: "module" });
+    try {
+      engine = await w.CreateWebWorkerMLCEngine(llmWorker, st.id, { initProgressCallback: onProgress });
+    } catch (e) {
+      llmWorker.terminate(); llmWorker = null; engine = null;
+      throw fail("The in-browser AI couldn't start (" + clip(String((e && e.message) || e), 140) + "). Try the Lite model in AI settings, or use Chrome or Edge.");
+    }
+    engineId = st.id;
+    refreshChip();
+    return engine;
+  }
+  async function viaLocal(prompt, purpose, signal, onText, allowDownload, ui) {
+    const st = await localState();
+    if (st.state === "unsupported") throw fail("This browser can't run the in-browser AI. It needs Chrome or Edge (or another browser with WebGPU) on a laptop or desktop.", { unsupported: true });
+    if (st.state === "download" && !allowDownload) throw fail("", { needDownload: true });
+    if (st.state !== "ready") {
+      ui.busy(st.state === "download" ? "Downloading the AI model (one time only)…" : "Loading the AI model from your browser…", true);
+      await ensureLocal((r) => ui.progress(r.progress, r.text));
+      ui.busy(purpose === "code" ? "Converting your logic…" : "Thinking…", false);
+    }
+    const onAbort = () => { try { engine.interruptGenerate(); } catch (e) { /* ignore */ } };
+    signal.addEventListener("abort", onAbort);
+    try {
+      const chunks = await engine.chat.completions.create({
+        messages: [{ role: "system", content: purpose === "code" ? SYSTEM : TUTOR }, { role: "user", content: prompt }],
+        temperature: 0.1, max_tokens: purpose === "code" ? 1400 : 350, stream: true
+      });
+      let text = "";
+      for await (const c of chunks) { text += (c.choices && c.choices[0] && c.choices[0].delta && c.choices[0].delta.content) || ""; if (onText) onText(text); }
+      if (signal.aborted) throw fail("Stopped.", { cancelled: true });
+      return text;
+    } catch (e) {
+      if (signal.aborted) throw fail("Stopped.", { cancelled: true });
+      if (e && (e.needDownload || e.unsupported || e.cancelled)) throw e;
+      throw fail("The in-browser AI stopped: " + clip(String((e && e.message) || e), 160));
+    } finally { signal.removeEventListener("abort", onAbort); }
+  }
+
+  async function askAI(prompt, purpose, opts) {
+    const mode = engineMode();
+    ctl = new AbortController();
+    const signal = ctl.signal, ui = opts.ui;
+    let serverErr = null;
+    if (CFG.aiServerUrl && mode !== "local" && (mode === "server" || !serverDown())) {
+      ui.busy(purpose === "code" ? "Converting your logic…" : "Thinking…", false);
+      try { const t = await viaServer(prompt, purpose, signal); if (opts.onText) opts.onText(t); return t; }
+      catch (e) {
+        if (e.cancelled || mode === "server") throw e;
+        serverErr = e;
+        store.set(K.serverDown, Date.now() + (e.quota ? 60 : 10) * 60000);
+        refreshChip();
+      }
+    }
+    try { return await viaLocal(prompt, purpose, signal, opts.onText, opts.allowDownload, ui); }
+    catch (e) {
+      if (serverErr && !e.cancelled) e.serverNote = serverErr.message + " ";
+      throw e;
+    }
+  }
+
+  /* ---------- AI status chip ---------- */
+  async function refreshChip() {
+    const mode = engineMode();
+    let txt = "AI: automatic", ok = true;
+    const serverOn = CFG.aiServerUrl && mode !== "local" && (mode === "server" || !serverDown());
+    if (serverOn) txt = "AI: class server";
+    else {
+      const st = await localState();
+      if (st.state === "unsupported") { txt = CFG.aiServerUrl ? "AI: server busy" : "AI: not available"; ok = false; }
+      else if (st.state === "download") txt = "AI: in browser (not downloaded)";
+      else txt = "AI: in your browser";
+    }
+    $("aiChipText").textContent = txt;
+    $("aiDot").className = "dot " + (ok ? "ok" : "off");
   }
 
   /* =====================================================================
      HOME
      ===================================================================== */
   let fDiff = "All", fTopic = "All", fStatus = "All", fQ = "";
-
   function renderStats() {
     const total = PROBLEMS.length, done = PROBLEMS.filter(p => solved[p.id]).length;
     const e = PROBLEMS.filter(p => p.diff === "Easy"), m = PROBLEMS.filter(p => p.diff === "Medium");
@@ -270,8 +310,7 @@ Write feedback in under 150 words, plain text, no headings or markdown.
   }
   function filtered() {
     return PROBLEMS.filter(p =>
-      (fDiff === "All" || p.diff === fDiff) &&
-      (fTopic === "All" || p.topic === fTopic) &&
+      (fDiff === "All" || p.diff === fDiff) && (fTopic === "All" || p.topic === fTopic) &&
       (fStatus === "All" || (fStatus === "solved" ? !!solved[p.id] : !solved[p.id])) &&
       (!fQ || (p.title + " " + p.topic + " " + p.n).toLowerCase().includes(fQ)));
   }
@@ -279,8 +318,8 @@ Write feedback in under 150 words, plain text, no headings or markdown.
     const rows = filtered();
     $("ptbody").innerHTML = rows.map(p => {
       const st = solved[p.id] ? "done" : tried[p.id] ? "tried" : "";
-      const stLabel = solved[p.id] ? "Solved" : tried[p.id] ? "Attempted" : "Not started";
-      return `<tr data-id="${p.id}"><td><span class="st-dot ${st}" role="img" aria-label="${stLabel}" title="${stLabel}"></span></td><td class="num">${p.n}</td><td><a href="#${p.id}">${esc(p.title)}</a></td><td class="topic">${esc(p.topic)}</td><td><span class="diff ${p.diff}">${p.diff}</span></td></tr>`;
+      const lbl = solved[p.id] ? "Solved" : tried[p.id] ? "Attempted" : "Not started";
+      return `<tr data-id="${p.id}"><td><span class="st-dot ${st}" role="img" aria-label="${lbl}" title="${lbl}"></span></td><td class="num">${p.n}</td><td><a href="#${p.id}">${esc(p.title)}</a></td><td class="topic">${esc(p.topic)}</td><td><span class="diff ${p.diff}">${p.diff}</span></td></tr>`;
     }).join("");
     $("emptyList").hidden = rows.length > 0;
   }
@@ -292,9 +331,9 @@ Write feedback in under 150 words, plain text, no headings or markdown.
   }
 
   /* =====================================================================
-     PROBLEM
+     PROBLEM PAGE
      ===================================================================== */
-  let cur = null, gen = null, run = null, worker = null, codeView = "lang", pendingLang = null, pendingPrompt = "", fbPromptText = "";
+  let cur = null, gen = null, run = null, pending = null, lastPrompt = "";
 
   function renderDesc(p) {
     const params = p.params.map(([n, t]) => `${esc(n)}: ${esc(t)}`).join(", ");
@@ -313,252 +352,210 @@ Write feedback in under 150 words, plain text, no headings or markdown.
       <div class="examples">${exs}</div>
       ${p.notes.length ? `<span class="mini-label">Notes</span><ul class="notes">${p.notes.map(n => `<li>${mdInline(n)}</li>`).join("")}</ul>` : ""}
       ${struct}
-      <p class="fine" style="margin-top:18px">Your logic is checked against ${p.tests.length} test cases. The first two are shown above.</p>`;
+      <p class="fine" style="margin-top:18px">Your code is checked against ${p.tests.length} test cases. The first two are shown above.</p>`;
     $("desc").scrollTop = 0;
   }
 
   function showProblem(id) {
     const p = byId.get(id);
     abortAll();
-    cur = p;
+    cur = p; run = null; pending = null;
     $("view-home").hidden = true; $("view-problem").hidden = false;
     document.title = `${p.title} · ${CFG.siteTitle}`;
     renderDesc(p);
     $("pIndex").textContent = `${p.n} of ${PROBLEMS.length}`;
     $("prevBtn").disabled = p.n === 1; $("nextBtn").disabled = p.n === PROBLEMS.length;
     $("pad").value = store.get(K.draft(id), ""); updateLines();
-    gen = store.get(K.gen(id), null); run = null; codeView = "lang";
-    $("status").hidden = true; $("testsWrap").hidden = true; $("testsEmpty").hidden = false;
-    $("copyFlow").hidden = true; $("pasteBox").value = "";
-    $("fbBox").hidden = true; $("fbCopy").hidden = true; $("fbEmpty").hidden = false;
-    $("reviewBtn").disabled = true;
-    setTabCount("");
-    if (gen) renderCode(); else { $("codeWrap").hidden = true; $("codeEmpty").hidden = false; }
-    selectTab("tests");
+    gen = store.get(K.gen(id), null);
+    aiUI.hide();
+    $("testCard").hidden = true; $("fbCard").hidden = true;
+    if (gen && gen.python) renderCode(); else $("codeCard").hidden = true;
+    updateStartNote();
     window.scrollTo(0, 0);
   }
 
-  function setStatus(msg, kind) { const s = $("status"); s.className = "status" + (kind ? " " + kind : ""); s.textContent = msg || ""; s.hidden = !msg; if (msg) $("testsEmpty").hidden = true; }
-  function setTabCount(txt) { $("t-tests").innerHTML = "Test results" + (txt ? ` <span class="count">${esc(txt)}</span>` : ""); }
-  function selectTab(name) {
-    ["tests", "code", "feedback"].forEach(t => { $("t-" + t).setAttribute("aria-selected", t === name); $("p-" + t).hidden = t !== name; });
-  }
+  function updateStartNote() { $("startNote").hidden = !$("codeCard").hidden || !$("testCard").hidden || !$("fbCard").hidden || !$("aiCard").hidden; }
   function setBusy(b) {
-    $("goBtn").disabled = b; $("hintBtn").disabled = b; $("stopBtn").hidden = !b;
-    $("reviewBtn").disabled = b || !run || !run.done;
+    $("convertBtn").disabled = b; $("hintBtn").disabled = b; $("stopBtn").hidden = !b;
+    $("runBtn").disabled = b; $("reviewBtn").disabled = b || !run || !run.done;
   }
   function markTried(p) { if (!tried[p.id]) { tried[p.id] = true; store.set(K.tried, tried); } }
-
-  function renderCode() {
-    if (!gen) return;
-    $("codeEmpty").hidden = true; $("codeWrap").hidden = false;
-    const hasOther = !!gen.code && gen.lang !== "javascript";
-    if (!hasOther) codeView = "js";
-    $("c-lang").hidden = !hasOther;
-    $("c-lang").textContent = hasOther ? LANGS[gen.lang].name : "";
-    $("c-js").textContent = hasOther ? "JavaScript (tested)" : "JavaScript";
-    $("c-lang").setAttribute("aria-selected", codeView === "lang");
-    $("c-js").setAttribute("aria-selected", codeView === "js");
-    $("codePre").textContent = (codeView === "js" ? gen.js : gen.code) || "(Claude did not produce code for this attempt.)";
-    $("copyCodeBtn").disabled = !(codeView === "js" ? gen.js : gen.code);
-    $("assumeList").innerHTML = (gen.assumptions || []).map(a => `<li>${esc(a)}</li>`).join("");
-    $("assumeWrap").hidden = !(gen.assumptions || []).length;
+  function setLang(l) {
+    lang = l; store.set(K.lang, l);
+    document.querySelectorAll(".langseg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.lang === l));
+    if (gen) renderCode();
   }
 
-  function useReply(text, lg) {
-    const p = cur;
-    const r = parseReply(text);
-    if (r.js.trim()) $("copyFlow").hidden = true;
-    gen = { js: r.js, code: r.code, lang: lg, assumptions: r.assumptions };
-    store.set(K.gen(p.id), gen);
-    codeView = "lang";
-    renderCode();
-    if (!r.js.trim()) {
-      selectTab("tests");
-      setStatus("No runnable JavaScript came back, so the tests didn't run. " + (r.assumptions[0] ? "Claude said: " + r.assumptions[0] : "Make sure your pseudocode describes the whole algorithm."), "warn");
-      return;
-    }
-    setStatus("");
-    selectTab("tests");
-    runTests(p, r.js);
+  /* ---------- AI card UI ---------- */
+  const aiUI = {
+    show(part) { ["aiBusy", "aiDownload", "aiNone"].forEach(x => { $(x).hidden = x !== part; }); $("aiError").hidden = true; $("aiCard").hidden = false; updateStartNote(); },
+    busy(text, withProgress) {
+      this.show("aiBusy"); $("aiBusyText").textContent = text;
+      $("aiProgWrap").hidden = !withProgress; if (withProgress) $("aiProg").style.width = "0%";
+      $("aiStream").hidden = true; $("aiStream").textContent = "";
+    },
+    progress(frac, text) { $("aiProgWrap").hidden = false; $("aiProg").style.width = Math.round((frac || 0) * 100) + "%"; if (text) $("aiBusyText").textContent = clip(text.replace(/\s+/g, " "), 140); },
+    stream(text) { const s = $("aiStream"); s.hidden = false; s.textContent = text.slice(-1200); s.scrollTop = s.scrollHeight; },
+    download() {
+      const info = localInfo(localBase());
+      $("dlSize").textContent = info.size || "a large file";
+      $("dlLiteBtn").hidden = CFG.localModels.length < 2 || localBase() === CFG.localModels[CFG.localModels.length - 1].id;
+      this.show("aiDownload");
+    },
+    none(text) { this.show("aiNone"); $("aiNoneText").textContent = text; },
+    error(text) { $("aiCard").hidden = false; ["aiBusy", "aiDownload", "aiNone"].forEach(x => { $(x).hidden = true; }); const e = $("aiError"); e.hidden = false; e.textContent = text; updateStartNote(); },
+    hide() { $("aiCard").hidden = true; updateStartNote(); }
+  };
+
+  function handleAIError(e, action) {
+    if (e.cancelled) { aiUI.hide(); return; }
+    if (e.needDownload) { pending = action; aiUI.download(); return; }
+    if (e.unsupported) { pending = action; aiUI.none((e.serverNote || "") + e.message + (CFG.aiServerUrl ? "" : " Your instructor can also turn on the free class AI server so it works on any device.")); return; }
+    aiUI.error((e.serverNote || "") + (e.message || "Something went wrong."));
   }
 
-  async function generate() {
+  /* ---------- convert ---------- */
+  async function convert(allowDownload) {
     const p = cur, pc = $("pad").value.trim();
-    if (!pc) { selectTab("tests"); setStatus("Write your algorithm in the editor first.", "warn"); $("pad").focus(); return; }
+    if (!pc) { aiUI.error("Write your algorithm in the editor first."); $("pad").focus(); return; }
     markTried(p);
-    const lg = lang;
-    const prompt = translatePrompt(p, pc, lg);
-    if (currentMode() === "copy") {
-      pendingPrompt = prompt; pendingLang = lg;
-      $("promptText").textContent = prompt; $("pasteBox").value = "";
-      $("copyFlow").hidden = false; $("codeEmpty").hidden = true;
-      selectTab("code");
-      const ok = await copyText(prompt, $("promptText"));
-      toast(ok ? "Prompt copied. Paste it into Claude, then paste the reply below." : "Select the prompt text and copy it.");
-      return;
-    }
-    killWorker();
-    selectTab("tests"); $("testsWrap").hidden = true;
-    setStatus("Claude is translating your steps into code. This usually takes 10 to 40 seconds.", "busy");
+    const prompt = convertPrompt(p, pc);
+    lastPrompt = prompt;
     setBusy(true);
     try {
-      const text = await askClaude(prompt, "code");
+      const text = await askAI(prompt, "code", { allowDownload, ui: aiUI, onText: (t) => { if (cur === p) aiUI.stream(t); } });
       if (cur !== p) return;
-      useReply(text, lg);
-    } catch (e) {
-      if (cur === p) setStatus(e.message || "Something went wrong.", e.cancelled ? "" : "err");
-    } finally { if (cur === p) setBusy(false); }
-  }
-
-  function showFeedback(label, text) {
-    $("fbEmpty").hidden = true; $("fbCopy").hidden = true;
-    const b = $("fbBox"); b.hidden = false;
-    b.innerHTML = `<span class="who">${esc(label)}</span>${esc(text)}`;
-  }
-  async function askForFeedback(kind) {
-    const p = cur, pc = $("pad").value.trim();
-    const prompt = kind === "hint" ? hintPrompt(p, pc) : reviewPrompt(p, pc);
-    const label = kind === "hint" ? "Hint" : "Feedback on your logic";
-    selectTab("feedback");
-    if (currentMode() === "copy") {
-      fbPromptText = prompt;
-      $("fbEmpty").hidden = true; $("fbBox").hidden = true; $("fbCopy").hidden = false;
-      $("fbPrompt").textContent = prompt;
-      const ok = await copyText(prompt, $("fbPrompt"));
-      toast(ok ? "Prompt copied. Paste it into Claude." : "Select the prompt text and copy it.");
-      return;
-    }
-    showFeedback(label, "Thinking…");
-    setBusy(true);
-    try { await askClaude(prompt, kind, (t) => { if (cur === p) showFeedback(label, t); }); }
-    catch (e) { if (cur === p) showFeedback(label, e.message || "Something went wrong."); }
+      aiUI.hide();
+      useReply(text, pc);
+    } catch (e) { if (cur === p) handleAIError(e, "convert"); }
     finally { if (cur === p) setBusy(false); }
   }
 
-  /* =====================================================================
-     Test runner: the generated JavaScript runs in a Web Worker with a time limit
-     ===================================================================== */
-  function HARNESS() {
-    const LN = class ListNode { constructor(val = 0, next = null) { this.val = val; this.next = next; } };
-    const TN = class TreeNode { constructor(val = 0, left = null, right = null) { this.val = val; this.left = left; this.right = right; } };
-    self.ListNode = LN; self.TreeNode = TN;
-    const toList = (a) => { let h = null; for (let i = a.length - 1; i >= 0; i--) h = new LN(a[i], h); return h; };
-    const fromList = (h) => { if (Array.isArray(h)) return h; const a = []; let g = 0; while (h && g++ < 100000) { a.push(h.val); h = h.next; } return a; };
-    const toTree = (a) => {
-      if (!a.length || a[0] == null) return null;
-      const root = new TN(a[0]); const q = [root]; let i = 1;
-      while (q.length && i < a.length) {
-        const n = q.shift();
-        if (i < a.length && a[i] != null) { n.left = new TN(a[i]); q.push(n.left); } i++;
-        if (i < a.length && a[i] != null) { n.right = new TN(a[i]); q.push(n.right); } i++;
-      }
-      return root;
-    };
-    const fromTree = (r) => {
-      if (Array.isArray(r)) return r;
-      const out = [], q = [r]; let g = 0;
-      while (q.length && g++ < 100000) { const n = q.shift(); if (n) { out.push(n.val); q.push(n.left || null, n.right || null); } else out.push(null); }
-      while (out.length && out[out.length - 1] == null) out.pop();
-      return out;
-    };
-    const expand = (v) => (v && typeof v === "object" && !Array.isArray(v) && v.$gen === "spread") ? Array.from({ length: v.n }, (_, i) => ((i * 7919) % 50021) - 25000) : v;
-    const toArg = (v, t) => { v = expand(v); return t === "ListNode" ? toList(v) : t === "TreeNode" ? toTree(v) : v; };
-    const fromRet = (v, t) => (t === "ListNode" ? fromList(v) : t === "TreeNode" ? fromTree(v) : v);
-    const keyOf = (v) => { if (v === undefined) return "undefined"; const s = JSON.stringify(v); return s === undefined ? String(v) : s; };
-    const normalize = (v, cmp) => {
-      if (!Array.isArray(v)) return v;
-      if (cmp === "sorted") return [...v].sort((a, b) => { const x = keyOf(a), y = keyOf(b); return x < y ? -1 : x > y ? 1 : 0; });
-      if (cmp === "sortedDeep") return normalize(v.map(x => (Array.isArray(x) ? normalize(x, "sorted") : x)), "sorted");
-      return v;
-    };
-    const fnv = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
-    let logs = [];
-    const show = (a) => { try { return typeof a === "string" ? a : JSON.stringify(a); } catch (e) { return String(a); } };
-    const log = (...a) => { if (logs.length < 10) logs.push(a.map(show).join(" ")); };
-    self.console = { log, info: log, warn: log, error: log, debug: log };
-    self.onmessage = (e) => {
-      const { tests, ptypes, rtype, cmp, fn: fname } = e.data;
-      const fn = self.__getFn && self.__getFn();
-      if (typeof fn !== "function") { self.postMessage({ type: "compile", error: "The generated code has no function named " + fname + "." }); return; }
-      for (let i = 0; i < tests.length; i++) {
-        logs = [];
-        self.postMessage({ type: "start", i });
-        const t0 = performance.now();
-        let got, error = null;
-        try { got = fromRet(fn(...tests[i].map((a, j) => toArg(a, ptypes[j]))), rtype); }
-        catch (err) { error = String((err && err.message) || err); }
-        const ms = Math.round(performance.now() - t0);
-        let key = null, hash = null, preview = "";
-        if (!error) {
-          try { const raw = keyOf(got); preview = raw.length > 300 ? raw.slice(0, 300) + "…" : raw; key = keyOf(normalize(got, cmp)); hash = fnv(key); if (key.length > 200000) key = null; }
-          catch (err) { error = "Could not read the returned value."; }
-        }
-        self.postMessage({ type: "result", i, key, hash, preview, error, ms, logs });
-      }
-      self.postMessage({ type: "done" });
-    };
+  function useReply(text, pc) {
+    const p = cur, r = parseReply(text);
+    if (!r.python.trim()) {
+      aiUI.error("The AI didn't return Python code" + (r.notes[0] ? ": " + r.notes[0] : ". Make sure your pseudocode describes the whole algorithm, then convert again."));
+      return;
+    }
+    gen = { python: r.python, java: r.java, notes: r.notes, src: pc };
+    store.set(K.gen(p.id), gen);
+    run = null;
+    $("testCard").hidden = true; $("fbCard").hidden = true;
+    renderCode();
+    $("codeCard").scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
-  function killWorker() { if (worker) { worker.terminate(); worker = null; } }
-  function abortAll() { if (ctl) { ctl.abort(); ctl = null; } killWorker(); setBusy(false); }
+  function renderCode() {
+    if (!gen) return;
+    $("codeCard").hidden = false;
+    $("c-python").setAttribute("aria-selected", lang === "python");
+    $("c-java").setAttribute("aria-selected", lang === "java");
+    const code = lang === "java" ? (gen.java || "// The AI didn't produce Java this time. Press Convert to code to try again.") : gen.python;
+    $("codePre").textContent = code;
+    $("runNote").textContent = lang === "java" ? "Tests run the Python version, which follows the same steps." : "Tests run this Python code.";
+    $("assumeList").innerHTML = (gen.notes || []).map(a => `<li>${esc(a)}</li>`).join("");
+    $("assumeWrap").hidden = !(gen.notes || []).length;
+    $("staleNote").hidden = $("pad").value.trim() === (gen.src || "").trim();
+    updateStartNote();
+  }
 
-  function runTests(p, js) {
-    killWorker();
-    const rows = p.tests.map(t => ({ input: fmtArgs(p, t.args), expected: expectedText(t), got: "", error: null, pass: false, state: "wait", logs: [], ms: 0 }));
-    run = { rows, done: false };
-    $("testsEmpty").hidden = true; $("testsWrap").hidden = false;
-    drawTests(); summarize();
+  /* ---------- hint & review ---------- */
+  function showFeedback(title, text) { $("fbCard").hidden = false; $("fbTitle").textContent = title; $("fbBox").textContent = text; updateStartNote(); }
+  async function feedback(kind, allowDownload) {
+    const p = cur, pc = $("pad").value.trim();
+    if (kind === "review" && !run) return;
+    const prompt = kind === "hint" ? hintPrompt(p, pc) : reviewPrompt(p, pc);
+    const title = kind === "hint" ? "Hint" : "Feedback on your logic";
+    lastPrompt = prompt;
+    showFeedback(title, "Thinking…");
     setBusy(true);
+    try {
+      await askAI(prompt, kind, { allowDownload, ui: aiUI, onText: (t) => { if (cur === p) showFeedback(title, t); } });
+      if (cur === p) aiUI.hide();
+    } catch (e) { if (cur === p) { $("fbCard").hidden = true; handleAIError(e, kind); } }
+    finally { if (cur === p) setBusy(false); }
+    if (cur === p) $("fbCard").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+  function runPending(allowDownload) {
+    const a = pending; pending = null;
+    if (a === "convert" || !a) convert(allowDownload);
+    else feedback(a, allowDownload);
+  }
 
-    const src = "(" + HARNESS.toString() + ")();\n" + js + `\n;self.__getFn = function () { return (typeof ${p.fn} === "function") ? ${p.fn} : undefined; };\n`;
-    let url;
-    try { url = URL.createObjectURL(new Blob([src], { type: "text/javascript" })); worker = new Worker(url); }
-    catch (e) { setStatus("Your browser blocked the test runner, so the tests could not run.", "err"); setBusy(false); return; }
-    const w = worker, LIMIT = 3000;
-    let timer = null, curI = 0;
-    const arm = () => { clearTimeout(timer); timer = setTimeout(onTimeout, LIMIT); };
+  /* =====================================================================
+     Python test runner (Pyodide in a Web Worker)
+     ===================================================================== */
+  let pyw = null, running = false;
+  function stopPython() { if (pyw) { pyw.terminate(); pyw = null; } running = false; }
+  function abortAll() { if (ctl) { ctl.abort(); ctl = null; } if (running) stopPython(); setBusy(false); }
+  function setTestStatus(msg, kind) { const s = $("testStatus"); s.className = "status" + (kind ? " " + kind : ""); s.textContent = msg || ""; s.hidden = !msg; }
+
+  function runTests() {
+    const p = cur;
+    if (!gen || !gen.python) return;
+    if (running) stopPython();
+    const rows = p.tests.map(t => ({ input: fmtArgs(p, t.args), expected: expectedText(t), got: "", error: null, logs: "", pass: false, state: "wait", ms: 0 }));
+    run = { rows, done: false };
+    $("testCard").hidden = false; $("fbCard").hidden = true; updateStartNote();
+    drawTests(); summarize(false);
+    setTestStatus("");
+    setBusy(true); running = true;
+    $("testCard").scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+    if (!pyw) pyw = new Worker(new URL("js/py-worker.js", document.baseURI));
+    const w = pyw, LIMIT = 5000;
+    let timer = null, curI = -1;
+    const arm = (ms) => { clearTimeout(timer); timer = setTimeout(onTimeout, ms); };
     const finish = () => {
-      clearTimeout(timer);
-      if (worker === w) { w.terminate(); worker = null; }
-      URL.revokeObjectURL(url);
+      clearTimeout(timer); running = false;
       run.done = true; drawTests(); summarize(true); setBusy(false);
-      if (rows.every(r => r.pass)) {
-        if (!solved[p.id]) { solved[p.id] = true; store.set(K.solved, solved); toast("Solved! Every test passed."); renderDesc(p); }
+      if (rows.length && rows.every(r => r.pass) && !solved[p.id]) {
+        solved[p.id] = true; store.set(K.solved, solved); toast("Solved! Every test passed."); renderDesc(p);
       }
     };
     function onTimeout() {
-      rows.forEach((r, i) => {
+      if (curI < 0) { setTestStatus("Python took too long to start. Check your internet connection and press Run tests again.", "err"); rows.forEach(r => { r.state = "skip"; }); }
+      else rows.forEach((r, i) => {
         if (r.state !== "wait" && r.state !== "running") return;
-        if (i === curI) { r.state = "tle"; r.error = "Took longer than 3 seconds. Look for an infinite loop, or an approach that is too slow for this input."; }
+        if (i === curI) { r.state = "tle"; r.error = "Took longer than 5 seconds. Look for an infinite loop, or an approach that is too slow for this input."; }
         else r.state = "skip";
       });
+      if (pyw === w) { w.terminate(); pyw = null; }
       finish();
     }
     w.onmessage = (ev) => {
-      if (worker !== w) return;
+      if (pyw !== w || cur !== p) return;
       const m = ev.data;
-      if (m.type === "compile") { rows.forEach(r => { r.state = "skip"; }); setStatus("The generated code couldn't run: " + m.error, "err"); finish(); return; }
-      if (m.type === "start") { curI = m.i; rows[m.i].state = "running"; arm(); return; }
+      if (m.type === "booting") { setTestStatus("Starting Python in your browser (the first run downloads about 13 MB)…", "busy"); return; }
+      if (m.type === "ready") { setTestStatus(""); return; }
+      if (m.type === "compile") { rows.forEach(r => { r.state = "skip"; }); setTestStatus("Your Python code didn't load: " + m.error + ". Convert again, or rewrite your logic.", "err"); finish(); return; }
+      if (m.type === "fatal") { rows.forEach(r => { if (r.state === "wait" || r.state === "running") r.state = "skip"; }); setTestStatus("Python couldn't start: " + m.error, "err"); w.terminate(); pyw = null; finish(); return; }
+      if (m.type === "start") { curI = m.i; rows[m.i].state = "running"; arm(LIMIT); drawTests(); return; }
       if (m.type === "result") {
         const r = rows[m.i], t = p.tests[m.i];
-        r.ms = m.ms; r.logs = m.logs || []; r.error = m.error; r.got = m.error ? "" : m.preview;
-        r.pass = !m.error && (t.expectedHash ? m.hash === t.expectedHash : m.key === keyOf(normalize(t.expected, p.cmp)));
-        r.state = r.pass ? "pass" : "fail";
-        drawTests(); summarize();
+        r.ms = m.ms; r.logs = m.logs || "";
+        if (!m.ok) { r.error = m.error; r.state = "fail"; }
+        else {
+          let v; try { v = JSON.parse(m.out); } catch (e) { v = m.out; }
+          r.got = keyOf(v);
+          const k = keyOf(normalize(v, p.cmp));
+          r.pass = t.expectedHash ? fnv(k) === t.expectedHash : k === keyOf(normalize(t.expected, p.cmp));
+          r.state = r.pass ? "pass" : "fail";
+        }
+        drawTests(); summarize(false);
         return;
       }
       if (m.type === "done") finish();
     };
     w.onerror = (ev) => {
       ev.preventDefault();
-      if (worker !== w) return;
+      if (pyw !== w) return;
       rows.forEach(r => { if (r.state === "wait" || r.state === "running") r.state = "skip"; });
-      setStatus("The generated JavaScript has an error and couldn't start: " + (ev.message || "syntax error") + ". Press Generate again.", "err");
-      finish();
+      setTestStatus("The test runner failed to start: " + (ev.message || "unknown error"), "err");
+      w.terminate(); pyw = null; finish();
     };
-    arm();
-    w.postMessage({ tests: p.tests.map(t => t.args), ptypes: p.params.map(x => x[1]), rtype: p.returns, cmp: p.cmp, fn: p.fn });
+    arm(90000);
+    w.postMessage({ type: "run", base: CFG.pyodideUrl, code: gen.python, fn: p.fn, tests: p.tests.map(t => t.args), ptypes: p.params.map(x => x[1]), rtype: p.returns });
   }
 
   function drawTests() {
@@ -569,44 +566,42 @@ Write feedback in under 150 words, plain text, no headings or markdown.
         <td class="n">${i + 1}</td>
         <td class="mono">${esc(clip(r.input))}</td>
         <td class="mono">${esc(clip(r.expected))}</td>
-        <td class="mono">${r.error ? "—" : esc(clip(r.got || ""))}${r.error ? `<span class="sub">${esc(clip(r.error, 220))}</span>` : ""}${r.logs.length ? `<span class="sub">printed: ${esc(clip(r.logs.join(" | "), 200))}</span>` : ""}</td>
+        <td class="mono">${r.error ? "—" : esc(clip(r.got || ""))}${r.error ? `<span class="sub">${esc(clip(r.error, 240))}</span>` : ""}${r.logs ? `<span class="sub">printed: ${esc(clip(r.logs.trim(), 200))}</span>` : ""}</td>
         <td><span class="res ${cls[r.state]}">${label[r.state]}</span></td>
       </tr>`).join("");
   }
   function summarize(done) {
-    const n = run.rows.filter(r => r.pass).length, all = run.rows.length;
-    const pill = $("tPill");
-    if (!done) { pill.className = "pill"; pill.textContent = `Running · ${n}/${all}`; $("tMeta").textContent = ""; setTabCount(""); return; }
+    const n = run.rows.filter(r => r.pass).length, all = run.rows.length, pill = $("tPill");
+    if (!done) { pill.className = "pill"; pill.textContent = `Running · ${n}/${all}`; $("tMeta").textContent = ""; return; }
     pill.className = "pill " + (n === all ? "pass" : "fail");
     pill.textContent = n === all ? `All ${all} passed` : `${n} of ${all} passed`;
     const slow = Math.max(0, ...run.rows.map(r => r.ms || 0));
-    $("tMeta").textContent = n === all ? `Slowest test: ${slow} ms` : "Open the failing rows to see where your logic differs.";
-    setTabCount(`${n}/${all}`);
+    $("tMeta").textContent = n === all ? `Slowest test: ${slow} ms` : "";
   }
 
   /* =====================================================================
      Settings modal
      ===================================================================== */
-  function openModal() {
-    const av = availableModes(), cm = currentMode();
-    $("mode-claude").hidden = !av.includes("claude");
-    $("mode-proxy").hidden = !av.includes("proxy");
-    document.querySelectorAll('input[name="mode"]').forEach(r => { r.checked = r.value === cm; });
-    $("apiModel").innerHTML = (CFG.apiModels || []).map(m => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("");
-    $("apiModel").value = store.get(K.model, (CFG.apiModels[0] || {}).id);
-    $("apiKey").value = store.get(K.key, "");
-    $("keybox").hidden = cm !== "apikey";
-    $("overlay").hidden = false;
-    $("closeModal").focus();
+  async function openModal() {
+    const mode = engineMode();
+    $("engine-server").hidden = !CFG.aiServerUrl;
+    document.querySelectorAll('input[name="engine"]').forEach(r => { r.checked = r.value === mode; });
+    $("modelSel").innerHTML = CFG.localModels.map(m => `<option value="${esc(m.id)}">${esc(m.label)} · ${esc(m.size || "")}</option>`).join("");
+    $("modelSel").value = localBase();
+    $("overlay").hidden = false; $("closeModal").focus();
+    const st = await localState();
+    const serverTxt = CFG.aiServerUrl ? (serverDown() ? "The class AI server is busy or has used today's free limit, so the AI in your browser is being used for now." : "The class AI server is on.") : "The class AI server isn't set up, so the AI runs in your browser.";
+    const localTxt = st.state === "unsupported" ? "This browser can't run the in-browser AI (it needs WebGPU: Chrome or Edge on a laptop or desktop)." : st.state === "download" ? "The in-browser AI works here. It downloads the first time you convert." : "The in-browser AI is downloaded on this device.";
+    $("engineSummary").textContent = serverTxt + " " + localTxt;
+    $("modelInfo").textContent = st.state === "unsupported" ? "Not available in this browser." : "Larger models translate more accurately. Each model is downloaded once and kept in this browser.";
+    $("delModel").disabled = st.state === "unsupported";
   }
   function closeModal(save) {
     if (save) {
-      const sel = document.querySelector('input[name="mode"]:checked');
-      if (sel) store.set(K.mode, sel.value);
-      const key = $("apiKey").value.trim();
-      if (key) store.set(K.key, key);
-      if ($("apiModel").value) store.set(K.model, $("apiModel").value);
-      if (sel && sel.value === "apikey" && !key) toast("Add an API key to use this mode.");
+      const sel = document.querySelector('input[name="engine"]:checked');
+      if (sel) store.set(K.engine, sel.value);
+      if (sel && sel.value !== "local") store.del(K.serverDown);
+      store.set(K.model, $("modelSel").value);
     }
     $("overlay").hidden = true;
     refreshChip();
@@ -618,15 +613,13 @@ Write feedback in under 150 words, plain text, no headings or markdown.
   function updateLines() {
     const n = $("pad").value.split("\n").length;
     let s = ""; for (let i = 1; i <= n; i++) s += i + "\n";
-    $("lines").textContent = s;
-    $("lines").scrollTop = $("pad").scrollTop;
+    $("lines").textContent = s; $("lines").scrollTop = $("pad").scrollTop;
   }
   function insertAtCursor(t, text) {
     t.focus();
     let ok = false;
     try { ok = document.execCommand("insertText", false, text); } catch (e) { ok = false; }
-    if (!ok) { const s = t.selectionStart, e = t.selectionEnd; t.setRangeText(text, s, e, "end"); }
-    t.dispatchEvent(new Event("input", { bubbles: true }));
+    if (!ok) { t.setRangeText(text, t.selectionStart, t.selectionEnd, "end"); t.dispatchEvent(new Event("input", { bubbles: true })); }
   }
 
   /* =====================================================================
@@ -646,12 +639,10 @@ Write feedback in under 150 words, plain text, no headings or markdown.
   function init() {
     $("siteTitle").textContent = CFG.siteTitle;
     $("courseLabel").textContent = CFG.courseLabel || ""; $("courseLabel").hidden = !CFG.courseLabel;
-    $("openClaude").href = CFG.claudeChatUrl; $("fbOpen").href = CFG.claudeChatUrl;
     $("topicSel").innerHTML = '<option value="All">All topics</option>' + TOPICS.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join("");
-    $("lang").value = lang;
+    document.querySelectorAll(".langseg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.lang === lang));
     const left = store.get(K.left, null); if (left) document.documentElement.style.setProperty("--left", left + "%");
     refreshChip();
-    samplePromise.then(refreshChip);
 
     // home
     $("q").addEventListener("input", (e) => { fQ = e.target.value.trim().toLowerCase(); renderList(); });
@@ -675,12 +666,16 @@ Write feedback in under 150 words, plain text, no headings or markdown.
     // editor
     const pad = $("pad");
     let saveT;
-    pad.addEventListener("input", () => { updateLines(); if (!cur) return; clearTimeout(saveT); const id = cur.id, v = pad.value; saveT = setTimeout(() => store.set(K.draft(id), v), 300); });
+    pad.addEventListener("input", () => {
+      updateLines(); if (!cur) return;
+      clearTimeout(saveT); const id = cur.id, v = pad.value; saveT = setTimeout(() => store.set(K.draft(id), v), 300);
+      if (gen && !$("codeCard").hidden) $("staleNote").hidden = v.trim() === (gen.src || "").trim();
+    });
     pad.addEventListener("scroll", () => { $("lines").scrollTop = pad.scrollTop; });
     let escTab = false;
     pad.addEventListener("keydown", (e) => {
       if (e.key === "Escape") { escTab = true; return; }
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (!$("goBtn").disabled) generate(); return; }
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (!$("convertBtn").disabled) convert(false); return; }
       if (e.key === "Tab" && !e.shiftKey && !escTab) { e.preventDefault(); insertAtCursor(pad, "    "); return; }
       if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
         const before = pad.value.slice(0, pad.selectionStart);
@@ -691,27 +686,31 @@ Write feedback in under 150 words, plain text, no headings or markdown.
       }
       escTab = false;
     });
-    $("lang").addEventListener("change", (e) => {
-      lang = e.target.value; store.set(K.lang, lang);
-      if (gen && gen.lang !== lang) toast(`Next run will also show ${LANGS[lang].name}.`);
-    });
+    document.querySelectorAll(".langseg button").forEach(b => b.addEventListener("click", () => setLang(b.dataset.lang)));
+    $("c-python").addEventListener("click", () => setLang("python"));
+    $("c-java").addEventListener("click", () => setLang("java"));
 
     // actions
-    $("goBtn").addEventListener("click", generate);
-    $("hintBtn").addEventListener("click", () => askForFeedback("hint"));
-    $("reviewBtn").addEventListener("click", () => askForFeedback("review"));
-    $("stopBtn").addEventListener("click", () => { if (ctl) ctl.abort(); if (worker) { killWorker(); setStatus("Stopped.", ""); setBusy(false); } });
-    ["tests", "code", "feedback"].forEach(t => $("t-" + t).addEventListener("click", () => selectTab(t)));
-    $("c-lang").addEventListener("click", () => { codeView = "lang"; renderCode(); });
-    $("c-js").addEventListener("click", () => { codeView = "js"; renderCode(); });
-    $("copyCodeBtn").addEventListener("click", async () => { const ok = await copyText($("codePre").textContent, $("codePre")); toast(ok ? "Code copied." : "Code selected. Press Ctrl/⌘ + C."); });
-    $("copyPromptBtn").addEventListener("click", async () => { const ok = await copyText(pendingPrompt, $("promptText")); toast(ok ? "Prompt copied. Paste it into Claude." : "Select the prompt text and copy it."); });
-    $("runPastedBtn").addEventListener("click", () => {
-      const t = $("pasteBox").value.trim();
-      if (!t) { toast("Paste Claude's reply first."); $("pasteBox").focus(); return; }
-      useReply(t, pendingLang || lang);
+    $("convertBtn").addEventListener("click", () => convert(false));
+    $("hintBtn").addEventListener("click", () => feedback("hint", false));
+    $("reviewBtn").addEventListener("click", () => feedback("review", false));
+    $("runBtn").addEventListener("click", runTests);
+    $("rewriteBtn").addEventListener("click", () => {
+      $("codeCard").hidden = true; $("testCard").hidden = true; $("fbCard").hidden = true; aiUI.hide(); updateStartNote();
+      const t = $("pad"); t.focus(); t.setSelectionRange(t.value.length, t.value.length);
+      t.scrollIntoView({ behavior: "smooth", block: "center" });
     });
-    $("fbCopyBtn").addEventListener("click", async () => { const ok = await copyText(fbPromptText, $("fbPrompt")); toast(ok ? "Prompt copied. Paste it into Claude." : "Select the prompt text and copy it."); });
+    $("stopBtn").addEventListener("click", () => { if (ctl) ctl.abort(); if (running) { stopPython(); setTestStatus("Stopped.", ""); if (run) { run.rows.forEach(r => { if (r.state === "wait" || r.state === "running") r.state = "skip"; }); drawTests(); summarize(true); } setBusy(false); } });
+    $("copyCodeBtn").addEventListener("click", async () => { const ok = await copyText($("codePre").textContent); toast(ok ? "Code copied." : "Couldn't copy. Select the code and press Ctrl/⌘ + C."); });
+    $("dlBtn").addEventListener("click", () => runPending(true));
+    $("dlLiteBtn").addEventListener("click", () => { store.set(K.model, CFG.localModels[CFG.localModels.length - 1].id); refreshChip(); runPending(true); });
+    $("fbCopyPrompt").addEventListener("click", async () => { const ok = await copyText(lastPrompt); toast(ok ? "Prompt copied. Paste it into Claude.ai or ChatGPT." : "Couldn't copy the prompt."); });
+    $("fbUseReply").addEventListener("click", () => {
+      const t = $("fbPaste").value.trim(); if (!t) { toast("Paste the AI's reply first."); return; }
+      if (pending === "convert" || !pending) { aiUI.hide(); useReply(t, $("pad").value.trim()); }
+      else { aiUI.hide(); showFeedback(pending === "hint" ? "Hint" : "Feedback on your logic", t); }
+      $("fbPaste").value = "";
+    });
 
     // resizable split
     const g = $("gutter");
@@ -730,11 +729,19 @@ Write feedback in under 150 words, plain text, no headings or markdown.
     });
 
     // modal
-    $("modes").addEventListener("change", () => { const sel = document.querySelector('input[name="mode"]:checked'); $("keybox").hidden = !sel || sel.value !== "apikey"; });
     $("closeModal").addEventListener("click", () => closeModal(false));
     $("saveModal").addEventListener("click", () => closeModal(true));
     $("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeModal(false); });
-    $("forgetKey").addEventListener("click", () => { store.del(K.key); $("apiKey").value = ""; if (store.get(K.mode) === "apikey") store.set(K.mode, "copy"); toast("Saved key removed."); });
+    $("delModel").addEventListener("click", async () => {
+      try {
+        const w = await lib(), base = $("modelSel").value;
+        if (engine) { try { await engine.unload(); } catch (e) { /* ignore */ } engine = null; engineId = null; }
+        if (llmWorker) { llmWorker.terminate(); llmWorker = null; }
+        await w.deleteModelAllInfoInCache(localId(base, true)).catch(() => {});
+        await w.deleteModelAllInfoInCache(localId(base, false)).catch(() => {});
+        toast("Downloaded model deleted from this browser."); refreshChip();
+      } catch (e) { toast("Couldn't delete the model."); }
+    });
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("overlay").hidden) closeModal(false); });
 
     window.addEventListener("hashchange", route);
