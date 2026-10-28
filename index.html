@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Logic First</title>
+<meta name="description" content="Coding practice where you write only the algorithm in pseudocode. Claude turns it into code and the site runs it against test cases.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700;800&family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<!--APP-START-->
+<header class="topbar">
+  <div class="topbar-in">
+    <a class="brand" href="#" aria-label="Logic First home">
+      <span class="brand-mark" aria-hidden="true">{ }</span>
+      <span class="brand-text"><span class="brand-name" id="siteTitle">Logic First</span><span class="brand-sub" id="courseLabel"></span></span>
+    </a>
+    <nav class="topnav" aria-label="Main">
+      <a href="#" id="navProblems">Problems</a>
+      <button class="linkish" id="navHow">How it works</button>
+      <button class="ai-chip" id="aiChip" title="Choose how code gets generated"><span class="dot" aria-hidden="true"></span><span id="aiChipText">Copy &amp; paste mode</span></button>
+    </nav>
+  </div>
+</header>
+
+<!-- ============ HOME ============ -->
+<main id="view-home">
+  <section class="hero">
+    <div class="hero-in">
+      <div class="hero-copy">
+        <p class="eyebrow">Algorithm practice</p>
+        <h1>Think it through.<br><span class="hl">Claude writes the code.</span></h1>
+        <p class="lede">Pick a problem and write your algorithm as plain pseudocode. Claude translates your exact steps into Python, Java, C++, C or JavaScript, without fixing your mistakes, and the site runs the result against test cases. A pass means your logic works.</p>
+        <div class="hero-actions">
+          <button class="btn gold" id="startBtn">Start with a random problem</button>
+          <button class="btn ghost-light" id="howBtn2">How it works</button>
+        </div>
+      </div>
+      <div class="progress-card" aria-label="Your progress">
+        <div class="pc-top"><span class="pc-num" id="pcSolved">0</span><span class="pc-of">/ <span id="pcTotal">0</span> solved</span></div>
+        <div class="pc-row"><span>Easy</span><div class="bar"><i id="barEasy"></i></div><span class="pc-small" id="pcEasy"></span></div>
+        <div class="pc-row"><span>Medium</span><div class="bar"><i id="barMed"></i></div><span class="pc-small" id="pcMed"></span></div>
+        <p class="pc-note">Progress is saved in this browser only.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="list-wrap">
+    <div class="list-in">
+      <div class="filters">
+        <label class="search"><span class="sr">Search problems</span><input id="q" type="search" placeholder="Search by title or topic" autocomplete="off"></label>
+        <div class="seg" role="group" aria-label="Difficulty">
+          <button data-diff="All" aria-pressed="true">All</button>
+          <button data-diff="Easy" aria-pressed="false">Easy</button>
+          <button data-diff="Medium" aria-pressed="false">Medium</button>
+        </div>
+        <label class="sel"><span class="sr">Topic</span><select id="topicSel"><option value="All">All topics</option></select></label>
+        <label class="sel"><span class="sr">Status</span><select id="statusSel"><option value="All">Any status</option><option value="todo">Not solved</option><option value="solved">Solved</option></select></label>
+      </div>
+      <div class="topic-strip" id="topicStrip" aria-label="Topics"></div>
+      <div class="table-scroll">
+        <table class="ptable">
+          <thead><tr><th class="c-st"><span class="sr">Status</span></th><th class="c-n">#</th><th>Title</th><th class="c-topic">Topic</th><th class="c-diff">Difficulty</th></tr></thead>
+          <tbody id="ptbody"></tbody>
+        </table>
+      </div>
+      <p class="empty-list" id="emptyList" hidden>No problems match these filters.</p>
+    </div>
+  </section>
+</main>
+
+<!-- ============ PROBLEM ============ -->
+<main id="view-problem" hidden>
+  <div class="pbar">
+    <a href="#" class="back">&larr; All problems</a>
+    <div class="pnav">
+      <button class="btn small ghost" id="prevBtn">Previous</button>
+      <span class="pcount" id="pIndex"></span>
+      <button class="btn small ghost" id="nextBtn">Next</button>
+      <button class="btn small ghost" id="randBtn">Random</button>
+    </div>
+  </div>
+
+  <div class="split" id="split">
+    <article class="desc" id="desc" aria-label="Problem"></article>
+    <div class="gutter" id="gutter" role="separator" aria-orientation="vertical" aria-label="Resize panels" tabindex="0"></div>
+    <section class="work" aria-label="Your algorithm">
+      <div class="work-head">
+        <h2>Your algorithm</h2>
+        <label class="lang">Code in
+          <select id="lang">
+            <option value="python">Python</option>
+            <option value="java">Java</option>
+            <option value="cpp">C++</option>
+            <option value="c">C</option>
+            <option value="javascript">JavaScript</option>
+          </select>
+        </label>
+      </div>
+      <details class="tips">
+        <summary>Pseudocode tips</summary>
+        <ul>
+          <li>Write one step per line. Indent the steps inside a loop or an if.</li>
+          <li>Name your data structures: "a set called seen", "a stack", "a map from value to index".</li>
+          <li>Be specific about edges: "for i from 0 to n − 1", "while left &lt; right".</li>
+          <li>Say exactly what you return, including the "not found" case.</li>
+          <li>Plain English is fine. Claude follows what you wrote, not what you meant.</li>
+        </ul>
+      </details>
+      <div class="editor">
+        <div class="lines" id="lines" aria-hidden="true">1</div>
+        <textarea id="pad" spellcheck="false" aria-label="Pseudocode editor" placeholder="Example format, for a different problem (find the largest number):
+
+set best to the first number in the list
+for each number n in the list:
+    if n is bigger than best:
+        set best to n
+return best"></textarea>
+      </div>
+      <div class="actions">
+        <span class="kbd-hint">Ctrl/⌘ + Enter to run · Tab indents (Esc, then Tab, leaves the editor)</span>
+        <div class="action-btns">
+          <button class="btn ghost" id="hintBtn">Get a hint</button>
+          <button class="btn gold" id="goBtn">Generate code &amp; run tests</button>
+          <button class="btn ghost" id="stopBtn" hidden>Stop</button>
+        </div>
+      </div>
+
+      <div class="results">
+        <div class="rtabs" role="tablist">
+          <button role="tab" id="t-tests" aria-selected="true" data-tab="tests">Test results</button>
+          <button role="tab" id="t-code" aria-selected="false" data-tab="code">Code</button>
+          <button role="tab" id="t-feedback" aria-selected="false" data-tab="feedback">Hint &amp; feedback</button>
+        </div>
+
+        <div class="rpanel" id="p-tests" role="tabpanel">
+          <div class="status" id="status" hidden></div>
+          <div class="placeholder" id="testsEmpty">
+            <strong>No run yet.</strong>
+            <span>Write your steps, then press <b>Generate code &amp; run tests</b>. Each test case shows the input, the expected answer and what your logic produced.</span>
+          </div>
+          <div id="testsWrap" hidden>
+            <div class="tsum">
+              <span class="pill" id="tPill">Running</span>
+              <span class="tmeta" id="tMeta"></span>
+              <button class="btn small ghost" id="reviewBtn">Explain my result</button>
+            </div>
+            <div class="table-scroll"><table class="ttable"><thead><tr><th>#</th><th>Input</th><th>Expected</th><th>Your logic gave</th><th>Result</th></tr></thead><tbody id="tbody"></tbody></table></div>
+          </div>
+        </div>
+
+        <div class="rpanel" id="p-code" role="tabpanel" hidden>
+          <div id="copyFlow" hidden>
+            <ol class="copy-steps">
+              <li><div><b>Copy the prompt.</b> It contains the problem and your pseudocode.</div><button class="btn small gold" id="copyPromptBtn">Copy prompt</button></li>
+              <li><div><b>Paste it into Claude</b> and send it.</div><a class="btn small ghost" id="openClaude" href="https://claude.ai/new" target="_blank" rel="noopener">Open Claude.ai &#8599;</a></li>
+              <li class="paste-step"><div><b>Copy Claude's whole reply</b> and paste it here.</div>
+                <textarea id="pasteBox" spellcheck="false" placeholder="Paste Claude's full reply (with the code blocks) here"></textarea>
+                <button class="btn small gold" id="runPastedBtn">Run tests on this code</button>
+              </li>
+            </ol>
+            <details class="prompt-peek"><summary>Show the prompt</summary><pre id="promptText"></pre></details>
+          </div>
+          <div class="placeholder" id="codeEmpty"><strong>No code yet.</strong><span>The code Claude writes from your pseudocode appears here.</span></div>
+          <div id="codeWrap" hidden>
+            <div class="code-tabs">
+              <div class="ctabs" role="tablist">
+                <button role="tab" id="c-lang" aria-selected="true">Python</button>
+                <button role="tab" id="c-js" aria-selected="false">JavaScript (tested)</button>
+              </div>
+              <button class="btn small ghost" id="copyCodeBtn">Copy code</button>
+            </div>
+            <pre class="code" id="codePre"></pre>
+            <div class="assume" id="assumeWrap" hidden>
+              <span class="mini-label">How Claude read your steps</span>
+              <ul id="assumeList"></ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="rpanel" id="p-feedback" role="tabpanel" hidden>
+          <div class="placeholder" id="fbEmpty"><strong>Stuck?</strong><span>Press <b>Get a hint</b> for a nudge, or run your tests and press <b>Explain my result</b> for feedback on your logic.</span></div>
+          <div class="feedback" id="fbBox" hidden></div>
+          <div class="fb-copy" id="fbCopy" hidden>
+            <p>In copy &amp; paste mode, hints come from Claude.ai. Copy this prompt and paste it there.</p>
+            <div class="row"><button class="btn small gold" id="fbCopyBtn">Copy prompt</button><a class="btn small ghost" href="https://claude.ai/new" target="_blank" rel="noopener" id="fbOpen">Open Claude.ai &#8599;</a></div>
+            <details class="prompt-peek"><summary>Show the prompt</summary><pre id="fbPrompt"></pre></details>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<!-- ============ SETTINGS / HOW IT WORKS ============ -->
+<div class="overlay" id="overlay" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-head"><h2 id="modalTitle">How code gets generated</h2><button class="x" id="closeModal" aria-label="Close">&times;</button></div>
+    <div class="modal-body">
+      <p class="m-intro">Your pseudocode is turned into code by Claude. Choose how this browser talks to Claude. Tests always run right here in your browser.</p>
+      <div class="modes" id="modes" role="radiogroup" aria-label="Code generation mode">
+        <label class="mode" id="mode-claude" hidden><input type="radio" name="mode" value="claude"><span><b>Built into Claude</b><small>You're viewing this page inside Claude, so it can ask Claude directly. Each request uses your own Claude plan.</small></span></label>
+        <label class="mode" id="mode-proxy" hidden><input type="radio" name="mode" value="proxy"><span><b>Class server</b><small>Your instructor set up a server that sends requests to Claude. Nothing to configure.</small></span></label>
+        <label class="mode"><input type="radio" name="mode" value="copy"><span><b>Copy &amp; paste with Claude.ai</b><small>Free with any Claude.ai account. The site gives you a prompt to paste into Claude, and you paste Claude's reply back.</small></span></label>
+        <label class="mode"><input type="radio" name="mode" value="apikey"><span><b>My own Anthropic API key</b><small>Fully automatic. Uses a key from console.anthropic.com and is billed to that account. The key is stored only in this browser.</small></span></label>
+      </div>
+      <div class="keybox" id="keybox" hidden>
+        <label for="apiKey">API key</label>
+        <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…">
+        <label for="apiModel">Model</label>
+        <select id="apiModel"></select>
+        <p class="fine">The key is saved in this browser's local storage and sent only to api.anthropic.com. Don't use this on a shared computer. <button class="linkish dark" id="forgetKey">Remove saved key</button></p>
+      </div>
+      <h3>How it works</h3>
+      <ol class="how">
+        <li><b>Write the algorithm.</b> Plain-English steps are fine. Focus on the logic: loops, conditions, data structures, what to return.</li>
+        <li><b>Claude translates it literally.</b> It is told not to fix bugs or swap in a better algorithm, so the code does exactly what your steps say.</li>
+        <li><b>Tests run in your browser.</b> The JavaScript version runs against every test case with a time limit. All pass means the problem is solved.</li>
+        <li><b>Learn from the result.</b> "Explain my result" walks through a failing case so you can fix your thinking, not your syntax.</li>
+      </ol>
+    </div>
+    <div class="modal-foot"><button class="btn gold" id="saveModal">Done</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<!--APP-END-->
+<script src="js/config.js"></script>
+<script src="js/problems.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
