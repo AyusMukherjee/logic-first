@@ -4,14 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Logic First</title>
-<meta name="description" content="Coding practice where you write only the algorithm in pseudocode. Claude turns it into code and the site runs it against test cases.">
+<meta name="description" content="Algorithm practice: write the logic in pseudocode, a free AI turns it into Python and Java, and the site runs it against test cases.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700;800&family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<!--APP-START-->
 <header class="topbar">
   <div class="topbar-in">
     <a class="brand" href="#" aria-label="Logic First home">
@@ -21,7 +20,7 @@
     <nav class="topnav" aria-label="Main">
       <a href="#" id="navProblems">Problems</a>
       <button class="linkish" id="navHow">How it works</button>
-      <button class="ai-chip" id="aiChip" title="Choose how code gets generated"><span class="dot" aria-hidden="true"></span><span id="aiChipText">Copy &amp; paste mode</span></button>
+      <button class="ai-chip" id="aiChip" title="AI settings"><span class="dot" id="aiDot" aria-hidden="true"></span><span id="aiChipText">AI: automatic</span></button>
     </nav>
   </div>
 </header>
@@ -32,8 +31,8 @@
     <div class="hero-in">
       <div class="hero-copy">
         <p class="eyebrow">Algorithm practice</p>
-        <h1>Think it through.<br><span class="hl">Claude writes the code.</span></h1>
-        <p class="lede">Pick a problem and write your algorithm as plain pseudocode. Claude translates your exact steps into Python, Java, C++, C or JavaScript, without fixing your mistakes, and the site runs the result against test cases. A pass means your logic works.</p>
+        <h1>Think it through.<br><span class="hl">The AI writes the code.</span></h1>
+        <p class="lede">Pick a problem and write your algorithm as plain pseudocode. A free AI turns your exact steps into Python and Java, without fixing your mistakes. Then run it against the test cases, or rewrite your logic and try again.</p>
         <div class="hero-actions">
           <button class="btn gold" id="startBtn">Start with a random problem</button>
           <button class="btn ghost-light" id="howBtn2">How it works</button>
@@ -87,18 +86,14 @@
   <div class="split" id="split">
     <article class="desc" id="desc" aria-label="Problem"></article>
     <div class="gutter" id="gutter" role="separator" aria-orientation="vertical" aria-label="Resize panels" tabindex="0"></div>
+
     <section class="work" aria-label="Your algorithm">
       <div class="work-head">
-        <h2>Your algorithm</h2>
-        <label class="lang">Code in
-          <select id="lang">
-            <option value="python">Python</option>
-            <option value="java">Java</option>
-            <option value="cpp">C++</option>
-            <option value="c">C</option>
-            <option value="javascript">JavaScript</option>
-          </select>
-        </label>
+        <h2><span class="stepno">1</span>Write your algorithm</h2>
+        <div class="langseg" role="group" aria-label="Show code in">
+          <button data-lang="python" aria-pressed="true">Python</button>
+          <button data-lang="java" aria-pressed="false">Java</button>
+        </div>
       </div>
       <details class="tips">
         <summary>Pseudocode tips</summary>
@@ -107,7 +102,7 @@
           <li>Name your data structures: "a set called seen", "a stack", "a map from value to index".</li>
           <li>Be specific about edges: "for i from 0 to n − 1", "while left &lt; right".</li>
           <li>Say exactly what you return, including the "not found" case.</li>
-          <li>Plain English is fine. Claude follows what you wrote, not what you meant.</li>
+          <li>Plain English is fine. The AI follows what you wrote, not what you meant.</li>
         </ul>
       </details>
       <div class="editor">
@@ -121,74 +116,83 @@ for each number n in the list:
 return best"></textarea>
       </div>
       <div class="actions">
-        <span class="kbd-hint">Ctrl/⌘ + Enter to run · Tab indents (Esc, then Tab, leaves the editor)</span>
+        <span class="kbd-hint">Ctrl/⌘ + Enter converts · Tab indents (Esc, then Tab, leaves the editor)</span>
         <div class="action-btns">
           <button class="btn ghost" id="hintBtn">Get a hint</button>
-          <button class="btn gold" id="goBtn">Generate code &amp; run tests</button>
+          <button class="btn gold" id="convertBtn">Convert to code</button>
           <button class="btn ghost" id="stopBtn" hidden>Stop</button>
         </div>
       </div>
 
-      <div class="results">
-        <div class="rtabs" role="tablist">
-          <button role="tab" id="t-tests" aria-selected="true" data-tab="tests">Test results</button>
-          <button role="tab" id="t-code" aria-selected="false" data-tab="code">Code</button>
-          <button role="tab" id="t-feedback" aria-selected="false" data-tab="feedback">Hint &amp; feedback</button>
+      <div class="stages">
+        <!-- AI status: progress, one-time download, or not available -->
+        <div class="card ai-card" id="aiCard" hidden>
+          <div id="aiBusy" hidden>
+            <div class="busy-line"><span class="spinner" aria-hidden="true"></span><span id="aiBusyText">Converting your logic…</span></div>
+            <div class="progress" id="aiProgWrap" hidden><i id="aiProg"></i></div>
+            <pre class="stream" id="aiStream" hidden></pre>
+          </div>
+          <div id="aiDownload" hidden>
+            <h3>Turn on the free AI in your browser</h3>
+            <p>This runs an AI model on your own computer, so it's free and private. It needs a one-time download of <b id="dlSize">about 1.7 GB</b>. After that it loads from your browser's storage and works offline.</p>
+            <div class="row"><button class="btn gold" id="dlBtn">Download and convert</button><button class="btn ghost" id="dlLiteBtn">Use the Lite model instead</button></div>
+            <p class="fine">Best on Chrome or Edge, on a laptop or desktop, over Wi-Fi.</p>
+          </div>
+          <div id="aiNone" hidden>
+            <h3>The AI can't run here</h3>
+            <p id="aiNoneText">This browser can't run the in-browser AI.</p>
+            <details class="fallback"><summary>Use Claude.ai or ChatGPT instead (copy &amp; paste)</summary>
+              <div class="row"><button class="btn small gold" id="fbCopyPrompt">Copy prompt</button></div>
+              <textarea id="fbPaste" spellcheck="false" placeholder="Paste the AI's full reply here"></textarea>
+              <div class="row"><button class="btn small gold" id="fbUseReply">Use this reply</button></div>
+            </details>
+          </div>
+          <div class="status err" id="aiError" hidden></div>
         </div>
 
-        <div class="rpanel" id="p-tests" role="tabpanel">
-          <div class="status" id="status" hidden></div>
-          <div class="placeholder" id="testsEmpty">
-            <strong>No run yet.</strong>
-            <span>Write your steps, then press <b>Generate code &amp; run tests</b>. Each test case shows the input, the expected answer and what your logic produced.</span>
-          </div>
-          <div id="testsWrap" hidden>
-            <div class="tsum">
-              <span class="pill" id="tPill">Running</span>
-              <span class="tmeta" id="tMeta"></span>
-              <button class="btn small ghost" id="reviewBtn">Explain my result</button>
+        <!-- Step 2: generated code -->
+        <section class="card" id="codeCard" hidden>
+          <div class="card-head">
+            <h3><span class="stepno">2</span>Your logic as code</h3>
+            <div class="ctabs" role="tablist">
+              <button role="tab" id="c-python" aria-selected="true">Python</button>
+              <button role="tab" id="c-java" aria-selected="false">Java</button>
             </div>
-            <div class="table-scroll"><table class="ttable"><thead><tr><th>#</th><th>Input</th><th>Expected</th><th>Your logic gave</th><th>Result</th></tr></thead><tbody id="tbody"></tbody></table></div>
           </div>
-        </div>
+          <div class="stale" id="staleNote" hidden>You changed your logic after this code was made. Press <b>Convert to code</b> to update it.</div>
+          <div class="codebox"><pre class="code" id="codePre"></pre><button class="btn small ghost copybtn" id="copyCodeBtn">Copy</button></div>
+          <div class="assume" id="assumeWrap" hidden>
+            <span class="mini-label">How the AI read your steps</span>
+            <ul id="assumeList"></ul>
+          </div>
+          <div class="card-actions">
+            <button class="btn gold" id="runBtn">Run tests</button>
+            <button class="btn ghost" id="rewriteBtn">Rewrite my logic</button>
+            <span class="fine" id="runNote">Tests run the Python version.</span>
+          </div>
+        </section>
 
-        <div class="rpanel" id="p-code" role="tabpanel" hidden>
-          <div id="copyFlow" hidden>
-            <ol class="copy-steps">
-              <li><div><b>Copy the prompt.</b> It contains the problem and your pseudocode.</div><button class="btn small gold" id="copyPromptBtn">Copy prompt</button></li>
-              <li><div><b>Paste it into Claude</b> and send it.</div><a class="btn small ghost" id="openClaude" href="https://claude.ai/new" target="_blank" rel="noopener">Open Claude.ai &#8599;</a></li>
-              <li class="paste-step"><div><b>Copy Claude's whole reply</b> and paste it here.</div>
-                <textarea id="pasteBox" spellcheck="false" placeholder="Paste Claude's full reply (with the code blocks) here"></textarea>
-                <button class="btn small gold" id="runPastedBtn">Run tests on this code</button>
-              </li>
-            </ol>
-            <details class="prompt-peek"><summary>Show the prompt</summary><pre id="promptText"></pre></details>
+        <!-- Step 3: tests -->
+        <section class="card" id="testCard" hidden>
+          <div class="card-head">
+            <h3><span class="stepno">3</span>Test results</h3>
+            <span class="pill" id="tPill">Running</span>
+            <span class="tmeta" id="tMeta"></span>
+            <button class="btn small ghost" id="reviewBtn">Explain my result</button>
           </div>
-          <div class="placeholder" id="codeEmpty"><strong>No code yet.</strong><span>The code Claude writes from your pseudocode appears here.</span></div>
-          <div id="codeWrap" hidden>
-            <div class="code-tabs">
-              <div class="ctabs" role="tablist">
-                <button role="tab" id="c-lang" aria-selected="true">Python</button>
-                <button role="tab" id="c-js" aria-selected="false">JavaScript (tested)</button>
-              </div>
-              <button class="btn small ghost" id="copyCodeBtn">Copy code</button>
-            </div>
-            <pre class="code" id="codePre"></pre>
-            <div class="assume" id="assumeWrap" hidden>
-              <span class="mini-label">How Claude read your steps</span>
-              <ul id="assumeList"></ul>
-            </div>
-          </div>
-        </div>
+          <div class="status" id="testStatus" hidden></div>
+          <div class="table-scroll"><table class="ttable"><thead><tr><th>#</th><th>Input</th><th>Expected</th><th>Your code gave</th><th>Result</th></tr></thead><tbody id="tbody"></tbody></table></div>
+        </section>
 
-        <div class="rpanel" id="p-feedback" role="tabpanel" hidden>
-          <div class="placeholder" id="fbEmpty"><strong>Stuck?</strong><span>Press <b>Get a hint</b> for a nudge, or run your tests and press <b>Explain my result</b> for feedback on your logic.</span></div>
-          <div class="feedback" id="fbBox" hidden></div>
-          <div class="fb-copy" id="fbCopy" hidden>
-            <p>In copy &amp; paste mode, hints come from Claude.ai. Copy this prompt and paste it there.</p>
-            <div class="row"><button class="btn small gold" id="fbCopyBtn">Copy prompt</button><a class="btn small ghost" href="https://claude.ai/new" target="_blank" rel="noopener" id="fbOpen">Open Claude.ai &#8599;</a></div>
-            <details class="prompt-peek"><summary>Show the prompt</summary><pre id="fbPrompt"></pre></details>
-          </div>
+        <!-- Hints & feedback -->
+        <section class="card" id="fbCard" hidden>
+          <div class="card-head"><h3 id="fbTitle">Hint</h3></div>
+          <div class="feedback" id="fbBox"></div>
+        </section>
+
+        <div class="placeholder" id="startNote">
+          <strong>How this works</strong>
+          <span>Write your steps above and press <b>Convert to code</b>. You'll see your logic in Python and Java, then choose <b>Run tests</b> or <b>Rewrite my logic</b>.</span>
         </div>
       </div>
     </section>
@@ -198,36 +202,33 @@ return best"></textarea>
 <!-- ============ SETTINGS / HOW IT WORKS ============ -->
 <div class="overlay" id="overlay" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-    <div class="modal-head"><h2 id="modalTitle">How code gets generated</h2><button class="x" id="closeModal" aria-label="Close">&times;</button></div>
+    <div class="modal-head"><h2 id="modalTitle">How it works</h2><button class="x" id="closeModal" aria-label="Close">&times;</button></div>
     <div class="modal-body">
-      <p class="m-intro">Your pseudocode is turned into code by Claude. Choose how this browser talks to Claude. Tests always run right here in your browser.</p>
-      <div class="modes" id="modes" role="radiogroup" aria-label="Code generation mode">
-        <label class="mode" id="mode-claude" hidden><input type="radio" name="mode" value="claude"><span><b>Built into Claude</b><small>You're viewing this page inside Claude, so it can ask Claude directly. Each request uses your own Claude plan.</small></span></label>
-        <label class="mode" id="mode-proxy" hidden><input type="radio" name="mode" value="proxy"><span><b>Class server</b><small>Your instructor set up a server that sends requests to Claude. Nothing to configure.</small></span></label>
-        <label class="mode"><input type="radio" name="mode" value="copy"><span><b>Copy &amp; paste with Claude.ai</b><small>Free with any Claude.ai account. The site gives you a prompt to paste into Claude, and you paste Claude's reply back.</small></span></label>
-        <label class="mode"><input type="radio" name="mode" value="apikey"><span><b>My own Anthropic API key</b><small>Fully automatic. Uses a key from console.anthropic.com and is billed to that account. The key is stored only in this browser.</small></span></label>
-      </div>
-      <div class="keybox" id="keybox" hidden>
-        <label for="apiKey">API key</label>
-        <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…">
-        <label for="apiModel">Model</label>
-        <select id="apiModel"></select>
-        <p class="fine">The key is saved in this browser's local storage and sent only to api.anthropic.com. Don't use this on a shared computer. <button class="linkish dark" id="forgetKey">Remove saved key</button></p>
-      </div>
-      <h3>How it works</h3>
       <ol class="how">
         <li><b>Write the algorithm.</b> Plain-English steps are fine. Focus on the logic: loops, conditions, data structures, what to return.</li>
-        <li><b>Claude translates it literally.</b> It is told not to fix bugs or swap in a better algorithm, so the code does exactly what your steps say.</li>
-        <li><b>Tests run in your browser.</b> The JavaScript version runs against every test case with a time limit. All pass means the problem is solved.</li>
-        <li><b>Learn from the result.</b> "Explain my result" walks through a failing case so you can fix your thinking, not your syntax.</li>
+        <li><b>Convert to code.</b> A free AI translates your steps literally into Python and Java. It is told not to fix bugs or swap in a better algorithm.</li>
+        <li><b>Run tests or rewrite.</b> The Python version runs against every test case right in your browser. If something fails, press "Explain my result", then rewrite your logic.</li>
       </ol>
+
+      <h3>Which AI is used</h3>
+      <p class="m-intro" id="engineSummary"></p>
+      <div class="modes" id="modes" role="radiogroup" aria-label="AI engine">
+        <label class="mode"><input type="radio" name="engine" value="auto"><span><b>Automatic (recommended)</b><small>Uses the class AI server when it's available, and the AI in your browser otherwise.</small></span></label>
+        <label class="mode" id="engine-server"><input type="radio" name="engine" value="server"><span><b>Class AI server only</b><small>Fast, works on any device, nothing to download. Shared free daily limit.</small></span></label>
+        <label class="mode"><input type="radio" name="engine" value="local"><span><b>AI in my browser only</b><small>Runs on your computer. Free, private, no limits. One-time download.</small></span></label>
+      </div>
+      <div class="keybox">
+        <label for="modelSel">In-browser AI model</label>
+        <select id="modelSel"></select>
+        <p class="fine" id="modelInfo"></p>
+        <div class="row"><button class="btn small ghost" id="delModel">Delete downloaded model</button></div>
+      </div>
     </div>
     <div class="modal-foot"><button class="btn gold" id="saveModal">Done</button></div>
   </div>
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-<!--APP-END-->
 <script src="js/config.js"></script>
 <script src="js/problems.js"></script>
 <script src="js/app.js"></script>
